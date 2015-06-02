@@ -1,0 +1,8 @@
+[package]
+name = "perf-focus"
+version = "0.0.1"
+authors = ["Niko Matsakis <niko@alum.mit.edu>"]
+
+[dependencies]
+regex = "0.1"
+rusty-peg = "0"

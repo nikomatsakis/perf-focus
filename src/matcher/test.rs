@@ -101,3 +101,11 @@ fn matcher_a_all_not_c() {
     assert!(m.search_trace(&[format!("a"), format!("c")])
              .is_none());
 }
+
+#[test]
+fn matcher_brace_escape() {
+    let m = parse_matcher(r"{\{}").unwrap();
+
+    assert!(m.search_trace(&[format!("{{")])
+             .is_some());
+}

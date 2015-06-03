@@ -72,6 +72,8 @@ impl<'input> Symbol<'input, Parser<'input>> for MATCHER_RE {
                 balance += 1;
             } else if bytes[offset] == ('}' as u8) {
                 balance -= 1;
+            } else if bytes[offset] == ('\\' as u8) {
+                offset += 1; // skip next character
             }
         }
 

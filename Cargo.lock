@@ -3,7 +3,7 @@ name = "perf-focus"
 version = "0.0.1"
 dependencies = [
  "regex 0.1.33 (registry+https://github.com/rust-lang/crates.io-index)",
- "rusty-peg 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rusty-peg 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -21,7 +21,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "rusty-peg"
-version = "0.0.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "regex 0.1.33 (registry+https://github.com/rust-lang/crates.io-index)",

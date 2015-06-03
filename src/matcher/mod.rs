@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod test;
 
+use rusty_peg::{self, Symbol};
 use regex::Regex;
 use std::fmt::{Debug, Error, Formatter};
 
@@ -11,14 +12,50 @@ type StackTrace<'stack> = &'stack [StackFrame];
 type StackFrame = String;
 type MatchResult<'stack> = Result<StackTrace<'stack>, StackTrace<'stack>>;
 
-pub trait Matcher {
+///////////////////////////////////////////////////////////////////////////
+
+mod parser;
+
+pub fn parse_matcher(s: &str) -> Result<Matcher, rusty_peg::Error> {
+    let mut parser = parser::Parser::new(());
+    match parser::MATCHER.parse_complete(&mut parser, s) {
+        Ok(m) => Ok(m),
+        Err(err) => Err(err)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+
+pub struct Matcher {
+    object: Box<MatcherTrait>
+}
+
+impl Matcher {
+    fn new<M:MatcherTrait+'static>(m: M) -> Matcher {
+        Matcher { object: Box::new(m) }
+    }
+}
+
+impl Clone for Matcher {
+    fn clone(&self) -> Matcher {
+        Matcher { object: self.object.clone_object() }
+    }
+}
+
+impl Debug for Matcher {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
+        write!(fmt, "{:?}", self.object)
+    }
+}
+
+impl Matcher {
     fn search_trace<'stack>(&self, input: StackTrace<'stack>) -> Option<SearchResult<'stack>> {
         // Drop off frames from the top until we find a match. Return
         // the frames we dropped, and those that followed the match.
         let mut stack = input;
         let mut dropped = 0;
         while !stack.is_empty() {
-            match self.match_trace(stack) {
+            match self.object.match_trace(stack) {
                 Ok(suffix) => {
                     return Some(SearchResult {
                         input: input,
@@ -35,12 +72,22 @@ pub trait Matcher {
         None
     }
 
-    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack>;
-    fn debug(&self) -> String;
+    fn match_trace<'stack>(&self, input: StackTrace<'stack>) -> MatchResult<'stack> {
+        self.object.match_trace(input)
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
 
+trait MatcherTrait: Debug {
+    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack>;
+
+    fn clone_object(&self) -> Box<MatcherTrait>;
+}
+
+///////////////////////////////////////////////////////////////////////////
+
+#[allow(dead_code)]
 pub struct SearchResult<'stack> {
     // all frames that were provided as input
     input: StackTrace<'stack>,
@@ -60,13 +107,13 @@ pub struct RegexMatcher {
 }
 
 impl RegexMatcher {
-    pub fn new(r: String) -> RegexMatcher {
+    pub fn new(r: &str) -> RegexMatcher {
         let regex = Regex::new(&r).unwrap();
-        RegexMatcher { text: r, regex: regex }
+        RegexMatcher { text: r.to_string(), regex: regex }
     }
 }
 
-impl Matcher for RegexMatcher {
+impl MatcherTrait for RegexMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
         if !s.is_empty() && self.regex.is_match(&s[0]) {
             Ok(&s[1..])
@@ -75,8 +122,9 @@ impl Matcher for RegexMatcher {
         }
     }
 
-    fn debug(&self) -> String {
-        format!("{:?}", self)
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(RegexMatcher { text: self.text.clone(),
+                                regex: self.regex.clone() })
     }
 }
 
@@ -88,6 +136,7 @@ impl Debug for RegexMatcher {
 
 ///////////////////////////////////////////////////////////////////////////
 
+#[allow(dead_code)]
 pub struct WildcardMatcher {
     dummy: ()
 }
@@ -98,7 +147,7 @@ impl WildcardMatcher {
     }
 }
 
-impl Matcher for WildcardMatcher {
+impl MatcherTrait for WildcardMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
         if !s.is_empty() {
             Ok(&s[1..])
@@ -107,8 +156,8 @@ impl Matcher for WildcardMatcher {
         }
     }
 
-    fn debug(&self) -> String {
-        format!("{:?}", self)
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(WildcardMatcher { dummy: () })
     }
 }
 
@@ -120,110 +169,77 @@ impl Debug for WildcardMatcher {
 
 ///////////////////////////////////////////////////////////////////////////
 
-pub struct EmptyMatcher {
-    dummy: ()
+pub struct ParenMatcher {
+    matcher: Matcher
 }
 
-impl EmptyMatcher {
-    pub fn new() -> EmptyMatcher {
-        EmptyMatcher { dummy: () }
+impl ParenMatcher {
+    pub fn new(other: Matcher) -> ParenMatcher {
+        ParenMatcher { matcher: other }
     }
 }
 
-impl Matcher for EmptyMatcher {
+impl MatcherTrait for ParenMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
-        Ok(s)
+        self.matcher.match_trace(s)
     }
 
-    fn debug(&self) -> String {
-        format!("{:?}", self)
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(ParenMatcher { matcher: self.matcher.clone() })
     }
 }
 
-impl Debug for EmptyMatcher {
+impl Debug for ParenMatcher {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "*")
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////
-
-pub struct KleeneStarMatcher {
-    matcher: Box<Matcher>
-}
-
-impl KleeneStarMatcher {
-    pub fn new(other: Box<Matcher>) -> KleeneStarMatcher {
-        KleeneStarMatcher { matcher: other }
-    }
-}
-
-impl Matcher for KleeneStarMatcher {
-    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
-        let mut s = s;
-        loop {
-            match self.matcher.match_trace(s) {
-                Ok(t) => { s = t; }
-                Err(t) => { return Ok(s); }
-            }
-        }
-    }
-
-    fn debug(&self) -> String {
-        format!("{:?}", self)
-    }
-}
-
-impl Debug for KleeneStarMatcher {
-    fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "{}*", self.matcher.debug())
+        write!(fmt, "({:?})", self.matcher)
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
 
 pub struct ThenMatcher {
-    left: Box<Matcher>,
-    right: Box<Matcher>,
+    left: Matcher,
+    right: Matcher,
 }
 
 impl ThenMatcher {
-    pub fn new(left: Box<Matcher>, right: Box<Matcher>) -> ThenMatcher {
+    pub fn new(left: Matcher, right: Matcher) -> ThenMatcher {
         ThenMatcher { left: left, right: right }
     }
 }
 
-impl Matcher for ThenMatcher {
+impl MatcherTrait for ThenMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
         let t = try!(self.left.match_trace(s));
         let u = try!(self.right.match_trace(t));
         Ok(u)
     }
 
-    fn debug(&self) -> String {
-        format!("{:?}", self)
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(ThenMatcher { left: self.left.clone(),
+                              right: self.right.clone() })
     }
 }
 
 impl Debug for ThenMatcher {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "{},{}", self.left.debug(), self.right.debug())
+        write!(fmt, "{:?},{:?}", self.left, self.right)
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////
 
 pub struct SkipMatcher {
-    matcher: Box<Matcher>,
+    matcher: Matcher,
 }
 
 impl SkipMatcher {
-    pub fn new(matcher: Box<Matcher>) -> SkipMatcher {
+    pub fn new(matcher: Matcher) -> SkipMatcher {
         SkipMatcher { matcher: matcher }
     }
 }
 
-impl Matcher for SkipMatcher {
+impl MatcherTrait for SkipMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
         let mut t = s;
         loop {
@@ -240,13 +256,13 @@ impl Matcher for SkipMatcher {
         }
     }
 
-    fn debug(&self) -> String {
-        format!("{:?}", self)
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(SkipMatcher { matcher: self.matcher.clone() })
     }
 }
 
 impl Debug for SkipMatcher {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "..{}", self.matcher.debug())
+        write!(fmt, "..{:?}", self.matcher)
     }
 }

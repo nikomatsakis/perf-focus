@@ -76,3 +76,28 @@ fn matcher_parse_a_then_c() {
     assert!(m.search_trace(&[format!("a"), format!("c")])
              .unwrap().prefix.len() == 0);
 }
+
+#[test]
+fn matcher_a_not_c() {
+    let m = parse_matcher("{a},!{c}").unwrap();
+
+    assert!(m.search_trace(&[format!("a"), format!("b"), format!("c")])
+             .is_some());
+
+    assert!(m.search_trace(&[format!("a"), format!("c")])
+             .is_none());
+}
+
+#[test]
+fn matcher_a_all_not_c() {
+    let m = parse_matcher("{a},all !{c}").unwrap();
+
+    assert!(m.search_trace(&[format!("a"), format!("b"), format!("d")])
+             .is_some());
+
+    assert!(m.search_trace(&[format!("a"), format!("b"), format!("c")])
+             .is_none());
+
+    assert!(m.search_trace(&[format!("a"), format!("c")])
+             .is_none());
+}

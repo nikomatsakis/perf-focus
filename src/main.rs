@@ -34,7 +34,13 @@ fn main() {
         }
     });
 
+    println!("Matcher    : {:?}", matcher);
     println!("Matches    : {}", matches);
     println!("Not Matches: {}", not_matches);
-    println!("Percentage : {:3.0}%", (matches as f64) * 100.0 / (not_matches as f64));
+
+    let matchesf = matches as f64;
+    let not_matchesf = not_matches as f64;
+    let totalf = matchesf + not_matchesf;
+    let percentage = matchesf / totalf * 100.0;
+    println!("Percentage : {:3.0}%", percentage);
 }

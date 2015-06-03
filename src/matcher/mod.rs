@@ -130,7 +130,7 @@ impl MatcherTrait for RegexMatcher {
 
 impl Debug for RegexMatcher {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "[{}]", self.text)
+        write!(fmt, "{{{}}}", self.text)
     }
 }
 
@@ -192,6 +192,70 @@ impl MatcherTrait for ParenMatcher {
 impl Debug for ParenMatcher {
     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
         write!(fmt, "({:?})", self.matcher)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+
+pub struct NotMatcher {
+    matcher: Matcher
+}
+
+impl NotMatcher {
+    pub fn new(other: Matcher) -> NotMatcher {
+        NotMatcher { matcher: other }
+    }
+}
+
+impl MatcherTrait for NotMatcher {
+    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
+        match self.matcher.match_trace(s) {
+            Ok(t) => Err(t),
+            Err(_) => Ok(s),
+        }
+    }
+
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(NotMatcher { matcher: self.matcher.clone() })
+    }
+}
+
+impl Debug for NotMatcher {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
+        write!(fmt, "!{:?}", self.matcher)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+
+pub struct AllMatcher {
+    matcher: Matcher
+}
+
+impl AllMatcher {
+    pub fn new(other: Matcher) -> AllMatcher {
+        AllMatcher { matcher: other }
+    }
+}
+
+impl MatcherTrait for AllMatcher {
+    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
+        let mut t = s;
+        while !t.is_empty() {
+            try!(self.matcher.match_trace(t));
+            t = &t[1..];
+        }
+        Ok(s)
+    }
+
+    fn clone_object(&self) -> Box<MatcherTrait> {
+        Box::new(AllMatcher { matcher: self.matcher.clone() })
+    }
+}
+
+impl Debug for AllMatcher {
+    fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
+        write!(fmt, "!{:?}", self.matcher)
     }
 }
 

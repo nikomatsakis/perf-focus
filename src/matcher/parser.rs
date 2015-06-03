@@ -19,8 +19,7 @@ rusty_peg! {
             };
 
         MATCHER0: Matcher =
-            (MATCHER_RE / MATCHER_SKIP / MATCHER_PAREN /
-             MATCHER_NOT / MATCHER_ALL / MATCHER_ANY);
+            (MATCHER_RE / MATCHER_SKIP / MATCHER_PAREN / MATCHER_NOT / MATCHER_ANY);
 
         MATCHER_SKIP: Matcher =
             ("..", <rhs:MATCHER0>) => Matcher::new(SkipMatcher::new(rhs));
@@ -31,14 +30,8 @@ rusty_peg! {
         MATCHER_NOT: Matcher =
             ("!", <rhs:MATCHER0>) => Matcher::new(NotMatcher::new(rhs));
 
-        MATCHER_ALL: Matcher =
-            (ALL, <rhs:MATCHER0>) => Matcher::new(AllMatcher::new(rhs));
-
         MATCHER_ANY: Matcher =
             (".") => Matcher::new(WildcardMatcher::new());
-
-        ALL: &'input str =
-            regex(r"all\b");
     }
 }
 

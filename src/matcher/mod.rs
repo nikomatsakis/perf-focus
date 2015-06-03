@@ -228,39 +228,6 @@ impl Debug for NotMatcher {
 
 ///////////////////////////////////////////////////////////////////////////
 
-pub struct AllMatcher {
-    matcher: Matcher
-}
-
-impl AllMatcher {
-    pub fn new(other: Matcher) -> AllMatcher {
-        AllMatcher { matcher: other }
-    }
-}
-
-impl MatcherTrait for AllMatcher {
-    fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
-        let mut t = s;
-        while !t.is_empty() {
-            try!(self.matcher.match_trace(t));
-            t = &t[1..];
-        }
-        Ok(s)
-    }
-
-    fn clone_object(&self) -> Box<MatcherTrait> {
-        Box::new(AllMatcher { matcher: self.matcher.clone() })
-    }
-}
-
-impl Debug for AllMatcher {
-    fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-        write!(fmt, "!{:?}", self.matcher)
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////
-
 pub struct ThenMatcher {
     left: Matcher,
     right: Matcher,

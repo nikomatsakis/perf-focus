@@ -90,7 +90,7 @@ fn matcher_a_not_c() {
 
 #[test]
 fn matcher_a_all_not_c() {
-    let m = parse_matcher("{a},all !{c}").unwrap();
+    let m = parse_matcher("{a},!..{c}").unwrap();
 
     assert!(m.search_trace(&[format!("a"), format!("b"), format!("d")])
              .is_some());

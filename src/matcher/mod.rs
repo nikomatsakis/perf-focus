@@ -49,7 +49,7 @@ impl Debug for Matcher {
 }
 
 impl Matcher {
-    fn search_trace<'stack>(&self, input: StackTrace<'stack>) -> Option<SearchResult<'stack>> {
+    pub fn search_trace<'stack>(&self, input: StackTrace<'stack>) -> Option<SearchResult<'stack>> {
         // Drop off frames from the top until we find a match. Return
         // the frames we dropped, and those that followed the match.
         let mut stack = input;

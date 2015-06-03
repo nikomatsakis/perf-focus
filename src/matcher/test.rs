@@ -109,3 +109,21 @@ fn matcher_brace_escape() {
     assert!(m.search_trace(&[format!("{{")])
              .is_some());
 }
+
+#[test]
+fn matcher_parse_a_dotdot_b_dotdot_c() {
+    let m = parse_matcher("{a}..{b},{c}").unwrap();
+
+    assert!(m.search_trace(&[format!("a"), format!("b"), format!("c")])
+              .is_some());
+
+    assert!(m.search_trace(&[format!("a"), format!("x"), format!("b"), format!("y"), format!("c")])
+              .is_none());
+
+    assert!(m.search_trace(&[format!("a"), format!("x"), format!("b"), format!("b"), format!("c")])
+              .is_some());
+
+    assert!(m.search_trace(&[format!("a"), format!("x"), format!("y"), format!("c")])
+              .is_none());
+}
+

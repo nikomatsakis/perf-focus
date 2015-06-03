@@ -6,13 +6,17 @@ use rusty_peg::{Error, Symbol, Input, ParseResult};
 rusty_peg! {
     parser Parser<'input> {
         MATCHER: Matcher =
-            fold(<lhs:MATCHER0>,
-                 (",", <rhs:MATCHER0>) => {
-                     Matcher::new(ThenMatcher::new(lhs, rhs))
-                 },
-                 ("..", <rhs:MATCHER0>) => {
-                     Matcher::new(ThenMatcher::new(lhs, Matcher::new(SkipMatcher::new(rhs))))
-                 });
+            (MATCHER_COMMA_MATCHER /  MATCHER_SKIP_MATCHER / MATCHER0);
+
+        MATCHER_COMMA_MATCHER: Matcher =
+            (<lhs:MATCHER0>, ",", <rhs:MATCHER>) => {
+                Matcher::new(ThenMatcher::new(lhs, rhs))
+            };
+
+        MATCHER_SKIP_MATCHER: Matcher =
+            (<lhs:MATCHER0>, "..", <rhs:MATCHER>) => {
+                Matcher::new(ThenMatcher::new(lhs, Matcher::new(SkipMatcher::new(rhs))))
+            };
 
         MATCHER0: Matcher =
             (MATCHER_RE / MATCHER_SKIP / MATCHER_PAREN /

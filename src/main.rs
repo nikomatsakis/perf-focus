@@ -26,11 +26,10 @@ fn main() {
     let mut matches = 0;
     let mut not_matches = 0;
 
-    trace::each_trace(|trace| {
-        if matcher.search_trace(&trace.frames).is_some() {
+    trace::each_trace(|frames| {
+        if matcher.search_trace(frames).is_some() {
             matches += 1;
         } else {
-            println!("{:?}", trace);
             not_matches += 1;
         }
     });

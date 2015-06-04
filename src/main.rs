@@ -1,4 +1,5 @@
 use std::env;
+use std::io::stdin;
 
 extern crate regex;
 
@@ -26,7 +27,9 @@ fn main() {
     let mut matches = 0;
     let mut not_matches = 0;
 
-    trace::each_trace(|frames| {
+    let stdin = stdin();
+    let stdin = stdin.lock();
+    trace::each_trace(stdin, |frames| {
         if matcher.search_trace(frames).is_some() {
             matches += 1;
         } else {

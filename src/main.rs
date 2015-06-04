@@ -29,8 +29,8 @@ fn main() {
 
     let stdin = stdin();
     let stdin = stdin.lock();
-    trace::each_trace(stdin, |frames| {
-        if matcher.search_trace(frames).is_some() {
+    trace::each_trace(stdin, |args| {
+        if matcher.search_trace(&args.stack).is_some() {
             matches += 1;
         } else {
             not_matches += 1;

@@ -3,8 +3,14 @@ use std::io::{BufRead, stdin};
 
 #[cfg(test)] mod test;
 
+pub struct TraceArgs<'a> {
+    pub header: &'a [String],
+    pub process_name: &'a str,
+    pub stack: Vec<String>,
+}
+
 pub fn each_trace<B,F>(stdin: B, mut callback: F)
-    where B: BufRead, F: FnMut(&[String])
+    where B: BufRead, F: FnMut(TraceArgs)
 {
     let mut trigger = |mut frames: Vec<String>| -> Vec<String> {
         if !frames.is_empty() {
@@ -17,9 +23,8 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
 
             {
                 // First, extract the name of the process
-                // let mut header_words = frames[0].split(char::is_whitespace);
-                // let process_name = header_words.next().unwrap();
-                // let pid = header_words.next().unwrap();
+                let mut header_words = frames[0].split(char::is_whitespace);
+                let process_name = header_words.next().unwrap();
 
                 // Next, create a secondary vector containing just the
                 // callstack. Put this in order from top to bottom
@@ -33,7 +38,10 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
                     stack.push(fn_name);
                 }
 
-                callback(&stack);
+                let args = TraceArgs { header: &frames,
+                                       process_name: process_name,
+                                       stack: stack };
+                callback(args);
             }
 
             frames.truncate(0);

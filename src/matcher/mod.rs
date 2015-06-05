@@ -49,7 +49,7 @@ impl Debug for Matcher {
 }
 
 impl Matcher {
-    pub fn search_trace<'stack>(&self, input: StackTrace<'stack>) -> Option<SearchResult<'stack>> {
+    pub fn search_trace(&self, input: StackTrace) -> Option<SearchResult> {
         // Drop off frames from the top until we find a match. Return
         // the frames we dropped, and those that followed the match.
         let mut stack = input;
@@ -58,9 +58,8 @@ impl Matcher {
             match self.object.match_trace(stack) {
                 Ok(suffix) => {
                     return Some(SearchResult {
-                        input: input,
-                        prefix: &input[0..dropped],
-                        suffix: suffix
+                        first_matching_frame: dropped,
+                        first_callee_frame: input.len() - suffix.len(),
                     });
                 }
                 Err(_) => {
@@ -88,15 +87,9 @@ trait MatcherTrait: Debug {
 ///////////////////////////////////////////////////////////////////////////
 
 #[allow(dead_code)]
-pub struct SearchResult<'stack> {
-    // all frames that were provided as input
-    input: StackTrace<'stack>,
-
-    // those we had to drop
-    prefix: StackTrace<'stack>,
-
-    // the suffix
-    suffix: StackTrace<'stack>,
+pub struct SearchResult {
+    pub first_matching_frame: usize,
+    pub first_callee_frame: usize,
 }
 
 ///////////////////////////////////////////////////////////////////////////

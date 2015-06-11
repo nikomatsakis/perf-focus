@@ -10,15 +10,22 @@ extern crate regex;
 #[macro_use]
 extern crate rusty_peg;
 
+mod histogram;
 mod graph;
 mod matcher;
 mod trace;
 mod util;
 
+use histogram::Histogram;
 use graph::CallGraph;
-use matcher::{parse_matcher, Matcher};
+use matcher::{parse_matcher, Matcher, SearchResult};
 use regex::Regex;
 use util::percent;
+
+trait AddFrames {
+    fn add_frames<I>(&mut self, frames: I)
+        where I: Iterator<Item=String>;
+}
 
 struct Options {
     process_name_filter: Option<regex::Regex>,
@@ -27,7 +34,8 @@ struct Options {
     print_miss: bool,
     graph_file: Option<String>,
     graph_mode: Option<GraphMode>,
-    graph_threshold: u32,
+    hist_mode: Option<GraphMode>,
+    threshold: usize,
 }
 
 fn usage(msg: &str) -> ! {
@@ -37,10 +45,13 @@ fn usage(msg: &str) -> ! {
     println!(" --process-name <regex>   filter samples by process name");
     println!(" --print-match            dump samples that match");
     println!(" --print-miss             dump samples that do not match");
+    println!(" --threshold <n>          limit graph or histograms to the top <n> fns");
     println!(" --graph <file>           dumps a callgraph of matching samples into <file>");
     println!(" --graph-callers <file>   as above, but only dumps callers of the matcher");
     println!(" --graph-callees <file>   as above, but only dumps callees of the matcher");
-    println!(" --graph-threshold <n>    limit graph to edges that occur in more than <n>%");
+    println!(" --hist                   prints out the most common fns");
+    println!(" --hist-callers           prints out the most common fns amongst the callers");
+    println!(" --hist-callees           prints out the most common fns amongst the callees");
     println!("");
     println!("{}", msg);
     exit(1)
@@ -53,6 +64,7 @@ fn expect<T>(t: Option<T>) -> T {
     }
 }
 
+#[derive(Copy, Clone)]
 enum GraphMode { All, Caller, Callee }
 
 fn parse_options() -> Options {
@@ -65,7 +77,8 @@ fn parse_options() -> Options {
         print_miss: false,
         graph_file: None,
         graph_mode: None,
-        graph_threshold: 0,
+        hist_mode: None,
+        threshold: 22,
     };
 
     while let Some(arg) = args.next() {
@@ -93,9 +106,15 @@ fn parse_options() -> Options {
             set_graph(&mut options, args.next(), GraphMode::Caller);
         } else if arg == "--graph-callees" {
             set_graph(&mut options, args.next(), GraphMode::Callee);
-        } else if arg == "--graph_threshold" {
-            let n = expect(u32::from_str(&*expect(args.next())).ok());
-            options.graph_threshold = n;
+        } else if arg == "--hist" {
+            set_hist(&mut options, GraphMode::All);
+        } else if arg == "--hist-callers" {
+            set_hist(&mut options, GraphMode::Caller);
+        } else if arg == "--hist-callees" {
+            set_hist(&mut options, GraphMode::Callee);
+        } else if arg == "--threshold" {
+            let n = expect(usize::from_str(&*expect(args.next())).ok());
+            options.threshold = n;
         } else if arg.starts_with("-") {
             usage(&format!("Error: unknown argument: {}", arg));
         } else if options.matcher.is_some() {
@@ -124,11 +143,20 @@ fn parse_options() -> Options {
                  file_name: Option<String>,
                  mode: GraphMode)
     {
-        if options.graph_file.is_some() {
-            usage("Error: graph already specified");
+        if options.graph_mode.is_some() || options.hist_mode.is_some() {
+            usage("Error: graph or histogram already specified");
         }
         options.graph_file = Some(expect(file_name));
         options.graph_mode = Some(mode);
+    }
+
+    fn set_hist(options:  &mut Options,
+                mode: GraphMode)
+    {
+        if options.graph_mode.is_some() || options.hist_mode.is_some() {
+            usage("Error: graph or histogram already specified");
+        }
+        options.hist_mode = Some(mode);
     }
 }
 
@@ -137,67 +165,84 @@ fn main() {
     let matcher = options.matcher.as_ref().unwrap();
 
     let mut graph = CallGraph::new();
+    let mut hist = Histogram::new();
     let mut matches = 0;
     let mut not_matches = 0;
     let stdin = stdin();
     let stdin = stdin.lock();
     trace::each_trace(stdin, |args| {
-        match options.process_name_filter {
-            Some(ref regex) => {
-                if !regex.is_match(args.process_name) {
-                    return;
-                }
+        if let Some(ref regex) = options.process_name_filter {
+            if !regex.is_match(args.process_name) {
+                return;
             }
-            None => { }
         }
 
-        match matcher.search_trace(&args.stack) {
-            Some(result) => {
-                matches += 1;
+        if let Some(result) = matcher.search_trace(&args.stack) {
+            matches += 1;
 
-                if options.print_match {
-                    print_trace(&args.header);
-                }
-
-                match options.graph_mode {
-                    None => { }
-                    Some(GraphMode::All) => {
-                        graph.add_edges(args.stack.into_iter());
-                    }
-                    Some(GraphMode::Caller) => {
-                        graph.add_edges(
-                            args.stack
-                                .into_iter()
-                                .take(result.first_matching_frame)
-                                .chain(vec![format!("matched `{:?}`", matcher)].into_iter()));
-                    }
-                    Some(GraphMode::Callee) => {
-                        graph.add_edges(
-                            vec![format!("matched `{:?}`", matcher)]
-                                .into_iter()
-                                .chain(args.stack.into_iter().skip(result.first_callee_frame)));
-                    }
-                }
+            if options.print_match {
+                print_trace(&args.header);
             }
-            None => {
-                not_matches += 1;
 
-                if options.print_miss {
-                    print_trace(&args.header);
-                }
+            match (options.hist_mode, options.graph_mode) {
+                (Some(mode), _) => { add_frames(&matcher, mode, args.stack, result, &mut hist); }
+                (_, Some(mode)) => { add_frames(&matcher, mode, args.stack, result, &mut graph); }
+                (None, None) => { }
+            }
+        } else {
+            not_matches += 1;
+
+            if options.print_miss {
+                print_trace(&args.header);
             }
         }
     });
 
+    let total = matches + not_matches;
+    graph.set_total(total);
+
     if let Some(ref graph_file) = options.graph_file {
         check_err(&format!("Error printing graph to `{}`", graph_file),
-                  dump_graph(&graph, graph_file, options.graph_threshold));
+                  dump_graph(&graph, graph_file, options.threshold));
     }
 
     println!("Matcher    : {:?}", matcher);
     println!("Matches    : {}", matches);
     println!("Not Matches: {}", not_matches);
-    println!("Percentage : {}%", percent(matches, matches + not_matches));
+    println!("Percentage : {}%", percent(matches, total));
+
+    if options.hist_mode.is_some() {
+        println!("");
+        println!("Histogram");
+        hist.dump(total, options.threshold);
+    }
+}
+
+fn add_frames<F>(matcher: &Matcher,
+                 mode: GraphMode,
+                 frames: Vec<String>,
+                 result: SearchResult,
+                 acc: &mut F)
+    where F: AddFrames
+{
+    match mode {
+        GraphMode::All => {
+            acc.add_frames(frames.into_iter());
+        }
+        GraphMode::Caller => {
+            acc.add_frames(
+                frames
+                    .into_iter()
+                    .take(result.first_matching_frame)
+                    .chain(vec![format!("matched `{:?}`", matcher)].into_iter()));
+        }
+        GraphMode::Callee => {
+            acc.add_frames(
+                vec![format!("matched `{:?}`", matcher)]
+                    .into_iter()
+                    .chain(frames.into_iter().skip(result.first_callee_frame)));
+        }
+    }
 }
 
 fn print_trace(header: &[String]) {
@@ -207,9 +252,9 @@ fn print_trace(header: &[String]) {
     println!("");
 }
 
-fn dump_graph(graph: &CallGraph, graph_file: &str, graph_threshold: u32) -> io::Result<()> {
+fn dump_graph(graph: &CallGraph, graph_file: &str, threshold: usize) -> io::Result<()> {
     let mut file = BufWriter::new(try!(File::create(graph_file)));
-    graph.dump(&mut file, graph_threshold)
+    graph.dump(&mut file, threshold)
 }
 
 fn check_err<O,E:Display>(prefix: &str, r: Result<O,E>) -> O {

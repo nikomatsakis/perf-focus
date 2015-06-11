@@ -56,6 +56,12 @@ graph including only those frames that invoked the matched
 code. `--graph-callees` only includes those frame sthat were called by
 the matched code.
 
+In the graph, each node and edge is labeled with a percentage,
+indicating the percentage of samples in which it appeared. This
+percentage is **always** an absolute percentage across all samples in
+the run (it is not a percentage of the matching samples, in
+particular).
+
 By default, the graph includes the top 22 most significant functions
 (and edges between them). You can include more or less by passing
 `--threshold N` (to include the top N functions).
@@ -72,3 +78,16 @@ of the fn name, or coallescing functions:
 // strip the last `...::XXX` suffix:
 --rename '::[a-zA-Z0-9_]+$' ''
 ```
+
+### Histograms
+
+Instead of a graph, you can use the histogram options to just dump out the most common
+functions and the percentage of samples in which they appeared (as above, all percentages
+are absolute):
+
+```
+--hist
+--hist-callers
+--hist-callees
+```
+

@@ -71,29 +71,27 @@ impl CallGraph {
 
         // construct the edges.
         let mut edges = vec![];
-        let mut i = 0;
-        while i < self.frames.len() {
+        for i in 0..self.frames.len() {
             let caller = self.frames[i];
-            assert!(caller != MARKER); // else there would have been an empty frame
 
-            // when we reach the last item in this sample, collect the
-            // edges, remove duplicates, and insert them into the
-            // map. This way, if an edge occurs multiple times within
-            // one sample, it only gets counted a single time in the
-            // map.
-            let callee = self.frames[i+1];
-            if callee == MARKER {
+            // when we reach the end of a sample, collect the edges,
+            // remove duplicates, and insert them into the map. This
+            // way, if an edge occurs multiple times within one
+            // sample, it only gets counted a single time in the map.
+            if caller == MARKER {
                 edges.sort();
                 edges.dedup();
                 for &edge in &edges {
                     *self.edges.entry(edge).or_insert(0) += 1;
                 }
                 edges.truncate(0);
-                i += 2; // skip over the marker
-            } else {
-                // otherwise, move to the next item.
+                continue;
+            }
+
+            // otherwise, record an edge between this frame and the next
+            let callee = self.frames[i+1];
+            if callee != MARKER {
                 edges.push(Edge { caller: caller, callee: callee });
-                i += 1;
             }
         }
     }

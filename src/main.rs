@@ -36,6 +36,7 @@ struct Options {
     graph_mode: Option<GraphMode>,
     hist_mode: Option<GraphMode>,
     threshold: usize,
+    rename: Vec<(regex::Regex, String)>,
 }
 
 fn usage(msg: &str) -> ! {
@@ -52,6 +53,10 @@ fn usage(msg: &str) -> ! {
     println!(" --hist                   prints out the most common fns");
     println!(" --hist-callers           prints out the most common fns amongst the callers");
     println!(" --hist-callees           prints out the most common fns amongst the callees");
+    println!(" --rename <match> <repl>  post-process names for graphs/histograms;");
+    println!("                          see `replace_all` in Regex doc [1] for instructions.");
+    println!("                          May be specified more than once.");
+    println!("                          [1]: http://doc.rust-lang.org/regex/regex/index.html");
     println!("");
     println!("{}", msg);
     exit(1)
@@ -79,6 +84,7 @@ fn parse_options() -> Options {
         graph_mode: None,
         hist_mode: None,
         threshold: 22,
+        rename: vec![],
     };
 
     while let Some(arg) = args.next() {
@@ -115,6 +121,10 @@ fn parse_options() -> Options {
         } else if arg == "--threshold" {
             let n = expect(usize::from_str(&*expect(args.next())).ok());
             options.threshold = n;
+        } else if arg == "--rename" {
+            let m = check_err("invalid regular expression", Regex::new(&*expect(args.next())));
+            let r = expect(args.next());
+            options.rename.push((m, r));
         } else if arg.starts_with("-") {
             usage(&format!("Error: unknown argument: {}", arg));
         } else if options.matcher.is_some() {
@@ -185,9 +195,14 @@ fn main() {
             }
 
             match (options.hist_mode, options.graph_mode) {
-                (Some(mode), _) => { add_frames(&matcher, mode, args.stack, result, &mut hist); }
-                (_, Some(mode)) => { add_frames(&matcher, mode, args.stack, result, &mut graph); }
-                (None, None) => { }
+                (Some(mode), _) => {
+                    add_frames(&matcher, mode, args.stack, result, &options, &mut hist);
+                }
+                (_, Some(mode)) => {
+                    add_frames(&matcher, mode, args.stack, result, &options, &mut graph);
+                }
+                (None, None) => {
+                }
             }
         } else {
             not_matches += 1;
@@ -222,27 +237,43 @@ fn add_frames<F>(matcher: &Matcher,
                  mode: GraphMode,
                  frames: Vec<String>,
                  result: SearchResult,
+                 options: &Options,
                  acc: &mut F)
     where F: AddFrames
 {
     match mode {
         GraphMode::All => {
-            acc.add_frames(frames.into_iter());
+            acc.add_frames(
+                frames.into_iter()
+                      .map(|s| rename_frame(options, s)));
         }
         GraphMode::Caller => {
             acc.add_frames(
                 frames
                     .into_iter()
                     .take(result.first_matching_frame)
+                    .map(|s| rename_frame(options, s))
                     .chain(vec![format!("matched `{:?}`", matcher)].into_iter()));
         }
         GraphMode::Callee => {
             acc.add_frames(
                 vec![format!("matched `{:?}`", matcher)]
                     .into_iter()
-                    .chain(frames.into_iter().skip(result.first_callee_frame)));
+                    .chain(
+                        frames.into_iter()
+                              .skip(result.first_callee_frame)
+                              .map(|s| rename_frame(options, s))));
         }
     }
+}
+
+fn rename_frame(options: &Options, frame: String) -> String {
+    let mut frame = frame;
+    for &(ref regex, ref repl) in &options.rename {
+        let tmp = regex.replace_all(&frame, &repl[..]);
+        frame = tmp;
+    }
+    frame
 }
 
 fn print_trace(header: &[String]) {

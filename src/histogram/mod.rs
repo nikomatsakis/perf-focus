@@ -34,6 +34,9 @@ impl AddFrames for Histogram {
     fn add_frames<I>(&mut self, frames: I)
         where I: Iterator<Item=String>
     {
+        let mut frames: Vec<_> = frames.collect();
+        frames.sort();
+        frames.dedup();
         for frame in frames {
             *self.fns.entry(frame).or_insert(0) += 1;
         }

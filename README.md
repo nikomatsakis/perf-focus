@@ -1,7 +1,9 @@
 `perf-focus` is an in-progress tool that can you be used with `perf
 script` to answer queries about runtimes. Note that this tool is under
 heavy development and you should not expect stable usage at this
-point.
+point. Moreover, this documentation is incomplete, run `perf-focus
+--help` for a complete list of options (or, of course, you can read
+the source).
 
 ### Matcher
 

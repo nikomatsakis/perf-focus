@@ -11,6 +11,9 @@ matched the matcher critera and how many did not. Here is a simple
 example:
 
 ```
+// First gather some data:
+> perf record -F 99 -g <some-command-here>
+
 // Two equivalent invocations:
 > perf script | perf-focus '{^middle::traits}, ..{^je_}'
 > perf script | perf-focus '{^middle::traits}..{^je_}'

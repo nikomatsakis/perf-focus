@@ -2,19 +2,36 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Result, Write};
+use std::usize;
 use util::percent;
 
 use super::AddFrames;
 
 pub struct CallGraph {
     nodes: HashMap<String, NodeId>,
-    node_counts: Vec<usize>,
     edges: HashMap<Edge, usize>,
+    node_counts: Vec<usize>,
+
+    // Each frame of data is inlined into this
+    // vector, separated by by MARKER values.
+    // So if we are given 22, 23, 24 and 25, 26, 27
+    // as two frames, this vector would be
+    // `22, 23, 24, MARKER, 25, 26, 27, MARKER`.
+    //
+    // We never allow empty samples, so you shouldn't see MARKER,
+    // MARKER.
+    //
+    // The intention is to lower memory overhead versus
+    // Vec<Vec<NodeId>>, but I'm not sure how clever this really is.
+    frames: Vec<NodeId>,
+
     total: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct NodeId(usize);
+
+const MARKER: NodeId = NodeId(usize::MAX);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct Edge {
@@ -24,11 +41,61 @@ struct Edge {
 
 impl CallGraph {
     pub fn new() -> CallGraph {
-        CallGraph { nodes: HashMap::new(), edges: HashMap::new(), node_counts: vec![], total: 0 }
+        CallGraph { nodes: HashMap::new(), edges: HashMap::new(), node_counts: vec![], total: 0,
+                    frames: vec![] }
     }
 
-    pub fn set_total(&mut self, total: usize) {
+    pub fn set_total(&mut self, total: usize, threshold: usize) {
         self.total = total;
+
+        let mut percents: Vec<(u32, NodeId)> =
+            self.node_counts.iter()
+                            .map(|&count| percent(count, total))
+                            .enumerate()
+                            .map(|(index, percent)| (percent, NodeId(index)))
+                            .collect();
+
+        percents.sort();
+
+        // a map of the top N node ids, and their percentages
+        let top_node_ids: HashSet<NodeId> =
+            percents.iter()
+                    .rev()
+                    .take(threshold)
+                    .map(|&(_, i)| i)
+                    .collect();
+
+        // drop all nodes from the list of frames data if they don't
+        // appear in the top-node-ids list
+        self.frames.retain(|&n| n == MARKER || top_node_ids.contains(&n));
+
+        // construct the edges.
+        let mut edges = vec![];
+        let mut i = 0;
+        while i < self.frames.len() {
+            let caller = self.frames[i];
+            assert!(caller != MARKER); // else there would have been an empty frame
+
+            // when we reach the last item in this sample, collect the
+            // edges, remove duplicates, and insert them into the
+            // map. This way, if an edge occurs multiple times within
+            // one sample, it only gets counted a single time in the
+            // map.
+            let callee = self.frames[i+1];
+            if callee == MARKER {
+                edges.sort();
+                edges.dedup();
+                for &edge in &edges {
+                    *self.edges.entry(edge).or_insert(0) += 1;
+                }
+                edges.truncate(0);
+                i += 2; // skip over the marker
+            } else {
+                // otherwise, move to the next item.
+                edges.push(Edge { caller: caller, callee: callee });
+                i += 1;
+            }
+        }
     }
 
     pub fn node_id(&mut self, name: String) -> NodeId {
@@ -40,7 +107,7 @@ impl CallGraph {
         })
     }
 
-    pub fn dump(&self, out: &mut Write, threshold: usize) -> Result<()> {
+    pub fn dump(&self, out: &mut Write) -> Result<()> {
         try!(write!(out, "digraph G {{\n"));
         try!(write!(out, "  node [ shape=box ];"));
 
@@ -72,26 +139,21 @@ impl AddFrames for CallGraph {
         where I: Iterator<Item=String>
     {
         let mut node_ids: Vec<_> = frames.map(|frame| self.node_id(frame)).collect();
-        let mut edges: Vec<_> =
-            (1 .. node_ids.len())
-            .map(|i| Edge { caller: node_ids[i-1], callee: node_ids[i] })
-            .collect();
+
+        // just ignore empty samples
+        if node_ids.len() == 0 {
+            return;
+        }
+
+        self.frames.reserve(node_ids.len() + 1);
+        self.frames.extend(node_ids.iter().cloned());
+        self.frames.push(MARKER);
 
         node_ids.sort();
         node_ids.dedup();
 
-        edges.sort();
-        edges.dedup();
-
-        for edge in edges {
-            *self.edges.entry(edge).or_insert(0) += 1;
-        }
-
         for id in node_ids {
             self.node_counts[id.0] += 1;
         }
-
-        self.total += 1;
     }
-
 }

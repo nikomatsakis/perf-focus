@@ -199,11 +199,11 @@ fn main() {
     });
 
     let total = matches + not_matches;
-    graph.set_total(total);
+    graph.set_total(total, options.threshold);
 
     if let Some(ref graph_file) = options.graph_file {
         check_err(&format!("Error printing graph to `{}`", graph_file),
-                  dump_graph(&graph, graph_file, options.threshold));
+                  dump_graph(&graph, graph_file));
     }
 
     println!("Matcher    : {:?}", matcher);
@@ -252,9 +252,9 @@ fn print_trace(header: &[String]) {
     println!("");
 }
 
-fn dump_graph(graph: &CallGraph, graph_file: &str, threshold: usize) -> io::Result<()> {
+fn dump_graph(graph: &CallGraph, graph_file: &str) -> io::Result<()> {
     let mut file = BufWriter::new(try!(File::create(graph_file)));
-    graph.dump(&mut file, threshold)
+    graph.dump(&mut file)
 }
 
 fn check_err<O,E:Display>(prefix: &str, r: Result<O,E>) -> O {

@@ -96,7 +96,7 @@ impl CallGraph {
         }
     }
 
-    pub fn node_id(&mut self, name: String) -> NodeId {
+    fn node_id(&mut self, name: String) -> NodeId {
         let node_counts = &mut self.node_counts;
         *self.nodes.entry(name).or_insert_with(|| {
             let next_id = NodeId(node_counts.len());

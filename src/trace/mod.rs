@@ -1,5 +1,5 @@
-use std::io::{BufRead, stdin};
-// use regex::Regex;
+use itertools::Itertools;
+use std::io::BufRead;
 
 #[cfg(test)] mod test;
 
@@ -33,8 +33,12 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
                 // code.)
                 let mut stack = vec![];
                 for frame in frames[1..].iter().rev() {
-                    let mut words = frame.trim().split(char::is_whitespace);
-                    let fn_name = words.nth(1).unwrap().to_string();
+                    let words = frame.trim().split(char::is_whitespace);
+                    let fn_name: String =
+                        words.skip(1)
+                             .take_while(|w| !w.starts_with('('))
+                             .intersperse(" ")
+                             .collect();
                     stack.push(fn_name);
                 }
 

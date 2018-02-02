@@ -6,5 +6,5 @@ authors = ["Niko Matsakis <niko@alum.mit.edu>"]
 [dependencies]
 regex = "0.1"
 rusty-peg = "0"
-petgraph = "0"
-                    
+petgraph = "0.4"
+itertools = "0.7.6"

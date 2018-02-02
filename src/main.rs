@@ -6,6 +6,7 @@ use std::process::exit;
 use std::str::FromStr;
 
 extern crate regex;
+extern crate itertools;
 
 #[macro_use]
 extern crate rusty_peg;
@@ -191,7 +192,7 @@ fn main() {
             matches += 1;
 
             if options.print_match {
-                print_trace(&args.header);
+                print_trace(&args.header, Some(result));
             }
 
             match (options.hist_mode, options.graph_mode) {
@@ -208,7 +209,7 @@ fn main() {
             not_matches += 1;
 
             if options.print_miss {
-                print_trace(&args.header);
+                print_trace(&args.header, None);
             }
         }
     });
@@ -276,9 +277,38 @@ fn rename_frame(options: &Options, frame: String) -> String {
     frame
 }
 
-fn print_trace(header: &[String]) {
-    for string in header {
-        println!("{}", string);
+fn print_trace(header: &[String], selected: Option<SearchResult>) {
+    println!("{}", header[0]);
+
+    if let Some(SearchResult { first_matching_frame, first_callee_frame }) = selected {
+        // The search result is expressed counting backwards from
+        // **top** element in the stack, which is last in this list.
+        //
+        // Matcher: {a}..{b}
+        // against Frames:
+        //     z
+        //     b
+        //     y
+        //     a
+        //     x
+        // yields `{ first_callee_frame: 4, first_matching_frame: 1 }`
+        // we want to select from index `1..5`.
+        let selection_start = header.len() - first_callee_frame;
+        let selection_end = header.len() - first_matching_frame;
+
+        for string in &header[1..selection_start] {
+            println!("  {}", string);
+        }
+        for string in &header[selection_start..selection_end] {
+            println!("| {}", string);
+        }
+        for string in &header[selection_end..] {
+            println!("  {}", string);
+        }
+    } else {
+        for string in &header[1..] {
+            println!("  {}", string);
+        }
     }
     println!("");
 }

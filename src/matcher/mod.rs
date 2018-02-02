@@ -10,7 +10,44 @@ use std::fmt::{Debug, Error, Formatter};
 
 type StackTrace<'stack> = &'stack [StackFrame];
 type StackFrame = String;
-type MatchResult<'stack> = Result<StackTrace<'stack>, StackTrace<'stack>>;
+
+type MatchResult<'stack> = Result<StackTrace<'stack>, MatchError>;
+
+enum MatchError {
+    // Some part of our query failed to find a match, but we should
+    // skip the top frame and try again later. For example, if the
+    // query is `{a},{b}` and it is matching against
+    //
+    //     x
+    //     a <-- starting here
+    //     y
+    //     z
+    //     a
+    //     b
+    //
+    // then the `{a}` will match but the `{b}` match will yield
+    // `RecoverableError`.  This will cause us to start matching again
+    // from `y` (and we will eventually find a match later on).
+    RecoverableError,
+
+    // Some part of our query failed to find a match, and we should
+    // stop trying. This others with skip queries like `{a}..{b}` and
+    // `{a}..!{b}`. This is because the results are counterintuitive if we keep
+    // searching, particularly in the negative case. Consider this case:
+    //
+    //     x
+    //     a <-- first try here will fail...
+    //     y
+    //     b
+    //     a <-- ..but second try starting here succeeds
+    //     z
+    //
+    // This is basically "prolog cut"; the concept is fine, but apply
+    // it to every `..` is sort of a bit strict perhaps. It might be
+    // nice to have an operator that *didn't* cut, like `,..,` or
+    // something.
+    IrrecoverableError,
+}
 
 ///////////////////////////////////////////////////////////////////////////
 
@@ -49,7 +86,10 @@ impl Debug for Matcher {
 }
 
 impl Matcher {
-    pub fn search_trace(&self, input: StackTrace) -> Option<SearchResult> {
+    /// Try to match `self` against `input`; if it fails, drop the
+    /// bottom-most frame and match again. Keep doing this. If we ever
+    /// find a match, return `Some`, else return `None`.
+    pub fn search_trace<'stack>(&self, input: StackTrace<'stack>) -> Option<SearchResult> {
         // Drop off frames from the top until we find a match. Return
         // the frames we dropped, and those that followed the match.
         let mut stack = input;
@@ -62,15 +102,19 @@ impl Matcher {
                         first_callee_frame: input.len() - suffix.len(),
                     });
                 }
-                Err(_) => {
+                Err(MatchError::RecoverableError) => {
                     dropped += 1;
                     stack = &stack[1..];
+                }
+                Err(MatchError::IrrecoverableError) => {
+                    return None;
                 }
             }
         }
         None
     }
 
+    /// Try to match `self` against `input` without skipping any frames.
     fn match_trace<'stack>(&self, input: StackTrace<'stack>) -> MatchResult<'stack> {
         self.object.match_trace(input)
     }
@@ -79,14 +123,16 @@ impl Matcher {
 ///////////////////////////////////////////////////////////////////////////
 
 trait MatcherTrait: Debug {
+    /// Try to match `self` against `input` without skipping any frames.
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack>;
 
+    /// Clone this matcher.
     fn clone_object(&self) -> Box<MatcherTrait>;
 }
 
 ///////////////////////////////////////////////////////////////////////////
 
-#[allow(dead_code)]
+#[derive(Copy, Clone)]
 pub struct SearchResult {
     pub first_matching_frame: usize,
     pub first_callee_frame: usize,
@@ -111,7 +157,7 @@ impl MatcherTrait for RegexMatcher {
         if !s.is_empty() && self.regex.is_match(&s[0]) {
             Ok(&s[1..])
         } else {
-            Err(s)
+            Err(MatchError::RecoverableError)
         }
     }
 
@@ -145,7 +191,7 @@ impl MatcherTrait for WildcardMatcher {
         if !s.is_empty() {
             Ok(&s[1..])
         } else {
-            Err(s)
+            Err(MatchError::RecoverableError)
         }
     }
 
@@ -202,9 +248,11 @@ impl NotMatcher {
 
 impl MatcherTrait for NotMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
-        match self.matcher.match_trace(s) {
-            Ok(t) => Err(t),
-            Err(_) => Ok(s),
+        // Make sure that `self.matcher` doesn't match *anywhere* in
+        // the trace:
+        match self.matcher.search_trace(s) {
+            Some(_) => Err(MatchError::IrrecoverableError),
+            None => Ok(s),
         }
     }
 
@@ -265,18 +313,9 @@ impl SkipMatcher {
 
 impl MatcherTrait for SkipMatcher {
     fn match_trace<'stack>(&self, s: StackTrace<'stack>) -> MatchResult<'stack> {
-        let mut t = s;
-        loop {
-            match self.matcher.match_trace(t) {
-                Ok(u) => { return Ok(u); }
-                Err(_) => {
-                    if t.len() == 0 {
-                        return Err(s);
-                    }
-
-                    t = &t[1..];
-                }
-            }
+        match self.matcher.search_trace(s) {
+            Some(SearchResult { first_callee_frame, .. }) => Ok(&s[first_callee_frame..]),
+            None => Err(MatchError::IrrecoverableError),
         }
     }
 

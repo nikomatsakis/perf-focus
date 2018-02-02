@@ -32,7 +32,8 @@ struct Options {
     process_name_filter: Option<regex::Regex>,
     matcher: Option<Matcher>,
     print_match: bool,
-    print_miss: bool,
+    script_match: bool,
+    script_miss: bool,
     graph_file: Option<String>,
     graph_mode: Option<GraphMode>,
     hist_mode: Option<GraphMode>,
@@ -45,8 +46,10 @@ fn usage(msg: &str) -> ! {
     println!("");
     println!("Options:");
     println!(" --process-name <regex>   filter samples by process name");
-    println!(" --print-match            dump samples that match");
+    println!(" --print-match            dump samples that match and show why they matched");
     println!(" --print-miss             dump samples that do not match");
+    println!(" --script-match           dump samples that match in `perf script` format");
+    println!(" --script-miss            dump samples that do not match in `perf script` format");
     println!(" --threshold <n>          limit graph or histograms to the top <n> fns");
     println!(" --graph <file>           dumps a callgraph of matching samples into <file>");
     println!(" --graph-callers <file>   as above, but only dumps callers of the matcher");
@@ -79,8 +82,9 @@ fn parse_options() -> Options {
     let mut options = Options {
         process_name_filter: None,
         matcher: None,
+        script_match: false,
         print_match: false,
-        print_miss: false,
+        script_miss: false,
         graph_file: None,
         graph_mode: None,
         hist_mode: None,
@@ -105,8 +109,10 @@ fn parse_options() -> Options {
             }
         } else if arg == "--print-match" {
             options.print_match = true;
-        } else if arg == "--print-miss" {
-            options.print_miss = true;
+        } else if arg == "--script-match" {
+            options.script_match = true;
+        } else if arg == "--print-miss" || arg == "--script-miss" {
+            options.script_miss = true;
         } else if arg == "--graph" {
             set_graph(&mut options, args.next(), GraphMode::All);
         } else if arg == "--graph-callers" {
@@ -193,6 +199,8 @@ fn main() {
 
             if options.print_match {
                 print_trace(&args.header, Some(result));
+            } else if options.script_match {
+                print_trace(&args.header, None);
             }
 
             match (options.hist_mode, options.graph_mode) {
@@ -208,7 +216,7 @@ fn main() {
         } else {
             not_matches += 1;
 
-            if options.print_miss {
+            if options.script_miss {
                 print_trace(&args.header, None);
             }
         }
@@ -278,8 +286,6 @@ fn rename_frame(options: &Options, frame: String) -> String {
 }
 
 fn print_trace(header: &[String], selected: Option<SearchResult>) {
-    println!("{}", header[0]);
-
     if let Some(SearchResult { first_matching_frame, first_callee_frame }) = selected {
         // The search result is expressed counting backwards from
         // **top** element in the stack, which is last in this list.
@@ -296,6 +302,7 @@ fn print_trace(header: &[String], selected: Option<SearchResult>) {
         let selection_start = header.len() - first_callee_frame;
         let selection_end = header.len() - first_matching_frame;
 
+        println!("{}", header[0]);
         for string in &header[1..selection_start] {
             println!("  {}", string);
         }
@@ -306,8 +313,8 @@ fn print_trace(header: &[String], selected: Option<SearchResult>) {
             println!("  {}", string);
         }
     } else {
-        for string in &header[1..] {
-            println!("  {}", string);
+        for string in header {
+            println!("{}", string);
         }
     }
     println!("");

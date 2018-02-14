@@ -1,12 +1,12 @@
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{self, BufWriter, stdin};
+use std::io::{self, stdin, BufWriter};
 use std::process::exit;
 use std::str::FromStr;
 
-extern crate regex;
 extern crate itertools;
+extern crate regex;
 
 #[macro_use]
 extern crate rusty_peg;
@@ -15,17 +15,20 @@ mod histogram;
 mod graph;
 mod matcher;
 mod trace;
+mod tree;
 mod util;
 
 use histogram::Histogram;
 use graph::CallGraph;
 use matcher::{parse_matcher, Matcher, SearchResult};
 use regex::Regex;
+use tree::Tree;
 use util::percent;
 
 trait AddFrames {
     fn add_frames<I>(&mut self, frames: I)
-        where I: Iterator<Item=String>;
+    where
+        I: Iterator<Item = String>;
 }
 
 struct Options {
@@ -37,7 +40,10 @@ struct Options {
     graph_file: Option<String>,
     graph_mode: Option<GraphMode>,
     hist_mode: Option<GraphMode>,
-    threshold: usize,
+    top_n: usize,
+    tree_mode: Option<GraphMode>,
+    tree_max_depth: usize,
+    tree_min_percent: usize,
     rename: Vec<(regex::Regex, String)>,
 }
 
@@ -50,13 +56,18 @@ fn usage(msg: &str) -> ! {
     println!(" --print-miss             dump samples that do not match");
     println!(" --script-match           dump samples that match in `perf script` format");
     println!(" --script-miss            dump samples that do not match in `perf script` format");
-    println!(" --threshold <n>          limit graph or histograms to the top <n> fns");
+    println!(" --top-n <n>              limit graph or histograms to the top <n> fns");
     println!(" --graph <file>           dumps a callgraph of matching samples into <file>");
     println!(" --graph-callers <file>   as above, but only dumps callers of the matcher");
     println!(" --graph-callees <file>   as above, but only dumps callees of the matcher");
     println!(" --hist                   prints out the most common fns");
     println!(" --hist-callers           prints out the most common fns amongst the callers");
     println!(" --hist-callees           prints out the most common fns amongst the callees");
+    println!(" --tree                   prints out a tree of the samples");
+    println!(" --tree-callers           prints out an (inverted) tree of the callers");
+    println!(" --tree-callees           prints out a tree of the callees");
+    println!(" --tree-max-depth <n>     limit tree to the outermost N functions");
+    println!(" --tree-min-percent <n>   limit tree to fns whose total time exceeds N%");
     println!(" --rename <match> <repl>  post-process names for graphs/histograms;");
     println!("                          see `replace_all` in Regex doc [1] for instructions.");
     println!("                          May be specified more than once.");
@@ -69,12 +80,16 @@ fn usage(msg: &str) -> ! {
 fn expect<T>(t: Option<T>) -> T {
     match t {
         Some(v) => v,
-        None => usage("Error: missing argument")
+        None => usage("Error: missing argument"),
     }
 }
 
 #[derive(Copy, Clone)]
-enum GraphMode { All, Caller, Callee }
+enum GraphMode {
+    All,
+    Caller,
+    Callee,
+}
 
 fn parse_options() -> Options {
     let mut args = env::args().skip(1);
@@ -88,7 +103,10 @@ fn parse_options() -> Options {
         graph_file: None,
         graph_mode: None,
         hist_mode: None,
-        threshold: 22,
+        tree_mode: None,
+        top_n: 22,
+        tree_max_depth: ::std::usize::MAX,
+        tree_min_percent: 0,
         rename: vec![],
     };
 
@@ -104,7 +122,10 @@ fn parse_options() -> Options {
                     options.process_name_filter = Some(r);
                 }
                 Err(e) => {
-                    usage(&format!("Error: invalid process name regular expression: {}", e));
+                    usage(&format!(
+                        "Error: invalid process name regular expression: {}",
+                        e
+                    ));
                 }
             }
         } else if arg == "--print-match" {
@@ -125,11 +146,26 @@ fn parse_options() -> Options {
             set_hist(&mut options, GraphMode::Caller);
         } else if arg == "--hist-callees" {
             set_hist(&mut options, GraphMode::Callee);
-        } else if arg == "--threshold" {
+        } else if arg == "--tree" {
+            set_tree(&mut options, GraphMode::All);
+        } else if arg == "--tree-callers" {
+            set_tree(&mut options, GraphMode::Caller);
+        } else if arg == "--tree-callees" {
+            set_tree(&mut options, GraphMode::Callee);
+        } else if arg == "--top-n" {
             let n = expect(usize::from_str(&*expect(args.next())).ok());
-            options.threshold = n;
+            options.top_n = n;
+        } else if arg == "--tree-max-depth" {
+            let n = expect(usize::from_str(&*expect(args.next())).ok());
+            options.tree_max_depth = n;
+        } else if arg == "--tree-min-percent" {
+            let n = expect(usize::from_str(&*expect(args.next())).ok());
+            options.tree_min_percent = n;
         } else if arg == "--rename" {
-            let m = check_err("invalid regular expression", Regex::new(&*expect(args.next())));
+            let m = check_err(
+                "invalid regular expression",
+                Regex::new(&*expect(args.next())),
+            );
             let r = expect(args.next());
             options.rename.push((m, r));
         } else if arg.starts_with("-") {
@@ -142,9 +178,11 @@ fn parse_options() -> Options {
                     options.matcher = Some(r);
                 }
                 Err(err) => {
-                    usage(&format!("Error: invalid matcher: {} (*) {}",
-                                   &arg[..err.offset],
-                                   &arg[err.offset..]));
+                    usage(&format!(
+                        "Error: invalid matcher: {} (*) {}",
+                        &arg[..err.offset],
+                        &arg[err.offset..]
+                    ));
                 }
             }
         }
@@ -156,24 +194,28 @@ fn parse_options() -> Options {
 
     return options;
 
-    fn set_graph(options:  &mut Options,
-                 file_name: Option<String>,
-                 mode: GraphMode)
-    {
-        if options.graph_mode.is_some() || options.hist_mode.is_some() {
-            usage("Error: graph or histogram already specified");
-        }
+    fn set_graph(options: &mut Options, file_name: Option<String>, mode: GraphMode) {
+        check_graph_hist_etc(options);
         options.graph_file = Some(expect(file_name));
         options.graph_mode = Some(mode);
     }
 
-    fn set_hist(options:  &mut Options,
-                mode: GraphMode)
-    {
-        if options.graph_mode.is_some() || options.hist_mode.is_some() {
-            usage("Error: graph or histogram already specified");
-        }
+    fn set_hist(options: &mut Options, mode: GraphMode) {
+        check_graph_hist_etc(options);
         options.hist_mode = Some(mode);
+    }
+
+    fn set_tree(options: &mut Options, mode: GraphMode) {
+        check_graph_hist_etc(options);
+        options.tree_mode = Some(mode);
+    }
+
+    fn check_graph_hist_etc(options: &Options) {
+        if options.graph_mode.is_some() || options.hist_mode.is_some()
+            || options.tree_mode.is_some()
+        {
+            usage("Error: graph, histogram, or tree already specified");
+        }
     }
 }
 
@@ -183,6 +225,7 @@ fn main() {
 
     let mut graph = CallGraph::new();
     let mut hist = Histogram::new();
+    let mut tree = Tree::new();
     let mut matches = 0;
     let mut not_matches = 0;
     let stdin = stdin();
@@ -203,15 +246,12 @@ fn main() {
                 print_trace(&args.header, None);
             }
 
-            match (options.hist_mode, options.graph_mode) {
-                (Some(mode), _) => {
-                    add_frames(&matcher, mode, args.stack, result, &options, &mut hist);
-                }
-                (_, Some(mode)) => {
-                    add_frames(&matcher, mode, args.stack, result, &options, &mut graph);
-                }
-                (None, None) => {
-                }
+            if let Some(mode) = options.hist_mode {
+                add_frames(&matcher, mode, args.stack, result, &options, &mut hist);
+            } else if let Some(mode) = options.graph_mode {
+                add_frames(&matcher, mode, args.stack, result, &options, &mut graph);
+            } else if let Some(mode) = options.tree_mode {
+                add_frames(&matcher, mode, args.stack, result, &options, &mut tree);
             }
         } else {
             not_matches += 1;
@@ -223,11 +263,13 @@ fn main() {
     });
 
     let total = matches + not_matches;
-    graph.set_total(total, options.threshold);
+    graph.set_total(total, options.top_n);
 
     if let Some(ref graph_file) = options.graph_file {
-        check_err(&format!("Error printing graph to `{}`", graph_file),
-                  dump_graph(&graph, graph_file));
+        check_err(
+            &format!("Error printing graph to `{}`", graph_file),
+            dump_graph(&graph, graph_file),
+        );
     }
 
     println!("Matcher    : {:?}", matcher);
@@ -238,40 +280,49 @@ fn main() {
     if options.hist_mode.is_some() {
         println!("");
         println!("Histogram");
-        hist.dump(total, options.threshold);
+        hist.dump(total, options.top_n);
+    }
+
+    if options.tree_mode.is_some() {
+        println!("");
+        println!("Tree");
+        tree.sort();
+        tree.dump(total, options.tree_max_depth, options.tree_min_percent);
     }
 }
 
-fn add_frames<F>(matcher: &Matcher,
-                 mode: GraphMode,
-                 frames: Vec<String>,
-                 result: SearchResult,
-                 options: &Options,
-                 acc: &mut F)
-    where F: AddFrames
+fn add_frames<F>(
+    matcher: &Matcher,
+    mode: GraphMode,
+    frames: Vec<String>,
+    result: SearchResult,
+    options: &Options,
+    acc: &mut F,
+) where
+    F: AddFrames,
 {
     match mode {
         GraphMode::All => {
-            acc.add_frames(
-                frames.into_iter()
-                      .map(|s| rename_frame(options, s)));
+            acc.add_frames(frames.into_iter().map(|s| rename_frame(options, s)));
         }
         GraphMode::Caller => {
-            acc.add_frames(
-                frames
-                    .into_iter()
-                    .take(result.first_matching_frame)
-                    .map(|s| rename_frame(options, s))
-                    .chain(vec![format!("matched `{:?}`", matcher)].into_iter()));
+            let caller_frames: Vec<_> = frames
+                .into_iter()
+                .take(result.first_matching_frame)
+                .map(|s| rename_frame(options, s))
+                .chain(vec![format!("matched `{:?}`", matcher)].into_iter())
+                .collect();
+            acc.add_frames(caller_frames.into_iter().rev());
         }
         GraphMode::Callee => {
             acc.add_frames(
-                vec![format!("matched `{:?}`", matcher)]
-                    .into_iter()
-                    .chain(
-                        frames.into_iter()
-                              .skip(result.first_callee_frame)
-                              .map(|s| rename_frame(options, s))));
+                vec![format!("matched `{:?}`", matcher)].into_iter().chain(
+                    frames
+                        .into_iter()
+                        .skip(result.first_callee_frame)
+                        .map(|s| rename_frame(options, s)),
+                ),
+            );
         }
     }
 }
@@ -286,7 +337,11 @@ fn rename_frame(options: &Options, frame: String) -> String {
 }
 
 fn print_trace(header: &[String], selected: Option<SearchResult>) {
-    if let Some(SearchResult { first_matching_frame, first_callee_frame }) = selected {
+    if let Some(SearchResult {
+        first_matching_frame,
+        first_callee_frame,
+    }) = selected
+    {
         // The search result is expressed counting backwards from
         // **top** element in the stack, which is last in this list.
         //
@@ -325,7 +380,7 @@ fn dump_graph(graph: &CallGraph, graph_file: &str) -> io::Result<()> {
     graph.dump(&mut file)
 }
 
-fn check_err<O,E:Display>(prefix: &str, r: Result<O,E>) -> O {
+fn check_err<O, E: Display>(prefix: &str, r: Result<O, E>) -> O {
     match r {
         Ok(o) => o,
         Err(e) => {

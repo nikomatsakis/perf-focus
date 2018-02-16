@@ -14,6 +14,7 @@ extern crate rusty_peg;
 mod histogram;
 mod graph;
 mod matcher;
+mod rustc_query;
 mod trace;
 mod tree;
 mod util;
@@ -33,6 +34,7 @@ trait AddFrames {
 
 struct Options {
     process_name_filter: Option<regex::Regex>,
+    rustc_query: bool,
     matcher: Option<Matcher>,
     print_match: bool,
     script_match: bool,
@@ -52,6 +54,7 @@ fn usage(msg: &str) -> ! {
     println!("");
     println!("Options:");
     println!(" --process-name <regex>   filter samples by process name");
+    println!(" --rustc-query            convert from raw stacks to rustc query stacks");
     println!(" --print-match            dump samples that match and show why they matched");
     println!(" --print-miss             dump samples that do not match");
     println!(" --script-match           dump samples that match in `perf script` format");
@@ -96,6 +99,7 @@ fn parse_options() -> Options {
 
     let mut options = Options {
         process_name_filter: None,
+        rustc_query: false,
         matcher: None,
         script_match: false,
         print_match: false,
@@ -132,6 +136,8 @@ fn parse_options() -> Options {
             options.print_match = true;
         } else if arg == "--script-match" {
             options.script_match = true;
+        } else if arg == "--rustc-query" {
+            options.rustc_query = true;
         } else if arg == "--print-miss" || arg == "--script-miss" {
             options.script_miss = true;
         } else if arg == "--graph" {
@@ -230,11 +236,15 @@ fn main() {
     let mut not_matches = 0;
     let stdin = stdin();
     let stdin = stdin.lock();
-    trace::each_trace(stdin, |args| {
+    trace::each_trace(stdin, |mut args| {
         if let Some(ref regex) = options.process_name_filter {
             if !regex.is_match(args.process_name) {
                 return;
             }
+        }
+
+        if options.rustc_query {
+            rustc_query::to_query_stack(&mut args);
         }
 
         if let Some(result) = matcher.search_trace(&args.stack) {

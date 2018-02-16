@@ -1,7 +1,9 @@
 use itertools::Itertools;
-use std::io::BufRead;
+use std::io::{self, BufRead};
+use std::process::{Command, Stdio};
 
-#[cfg(test)] mod test;
+#[cfg(test)]
+mod test;
 
 pub struct TraceArgs<'a> {
     pub header: &'a [String],
@@ -9,8 +11,30 @@ pub struct TraceArgs<'a> {
     pub stack: Vec<String>,
 }
 
-pub fn each_trace<B,F>(stdin: B, mut callback: F)
-    where B: BufRead, F: FnMut(TraceArgs)
+pub fn each_trace<F>(from_stdin: bool, callback: F) -> io::Result<()>
+where
+    F: FnMut(TraceArgs),
+{
+    if from_stdin {
+        let stdin = io::stdin();
+        let mut stdin = stdin.lock();
+        each_trace_impl(&mut stdin, callback)
+    } else {
+        let mut cmd = Command::new("perf")
+            .arg("script")
+            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        each_trace_impl(
+            &mut io::BufReader::new(cmd.stdout.as_mut().unwrap()),
+            callback,
+        )
+    }
+}
+
+fn each_trace_impl<F>(stdin: &mut BufRead, mut callback: F) -> io::Result<()>
+where
+    F: FnMut(TraceArgs),
 {
     let mut trigger = |mut frames: Vec<String>| -> Vec<String> {
         if !frames.is_empty() {
@@ -24,7 +48,7 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
             {
                 // First, extract the name of the process
                 let mut header_words = frames[0].split(char::is_whitespace);
-                let process_name = header_words.next().unwrap();
+                let process_name = header_words.next().unwrap_or("<no-process>");
 
                 // Next, create a secondary vector containing just the
                 // callstack. Put this in order from top to bottom
@@ -34,17 +58,19 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
                 let mut stack = vec![];
                 for frame in frames[1..].iter().rev() {
                     let words = frame.trim().split(char::is_whitespace);
-                    let fn_name: String =
-                        words.skip(1)
-                             .take_while(|w| !w.starts_with('('))
-                             .intersperse(" ")
-                             .collect();
+                    let fn_name: String = words
+                        .skip(1)
+                        .take_while(|w| !w.starts_with('('))
+                        .intersperse(" ")
+                        .collect();
                     stack.push(fn_name);
                 }
 
-                let args = TraceArgs { header: &frames,
-                                       process_name: process_name,
-                                       stack: stack };
+                let args = TraceArgs {
+                    header: &frames,
+                    process_name: process_name,
+                    stack: stack,
+                };
                 callback(args);
             }
 
@@ -63,7 +89,7 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
 
     let mut frames = vec![];
     for line in stdin.lines() {
-        let line = line.unwrap();
+        let line = line?;
 
         // comment
         if line.starts_with('#') {
@@ -90,5 +116,6 @@ pub fn each_trace<B,F>(stdin: B, mut callback: F)
     }
 
     trigger(frames);
-}
 
+    Ok(())
+}

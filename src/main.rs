@@ -1,7 +1,7 @@
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{self, stdin, BufWriter};
+use std::io::{self, BufWriter};
 use std::process::exit;
 use std::str::FromStr;
 
@@ -34,6 +34,7 @@ trait AddFrames {
 
 struct Options {
     process_name_filter: Option<regex::Regex>,
+    from_stdin: bool,
     rustc_query: bool,
     matcher: Option<Matcher>,
     print_match: bool,
@@ -75,6 +76,9 @@ fn usage(msg: &str) -> ! {
     println!("                          see `replace_all` in Regex doc [1] for instructions.");
     println!("                          May be specified more than once.");
     println!("                          [1]: http://doc.rust-lang.org/regex/regex/index.html");
+    println!(" --from-stdin             read samples from stdin;");
+    println!("                          when not using this option,");
+    println!("                          we will execute `perf script`");
     println!("");
     println!("{}", msg);
     exit(1)
@@ -99,6 +103,7 @@ fn parse_options() -> Options {
 
     let mut options = Options {
         process_name_filter: None,
+        from_stdin: false,
         rustc_query: false,
         matcher: None,
         script_match: false,
@@ -138,6 +143,8 @@ fn parse_options() -> Options {
             options.script_match = true;
         } else if arg == "--rustc-query" {
             options.rustc_query = true;
+        } else if arg == "--from-stdin" {
+            options.from_stdin = true;
         } else if arg == "--print-miss" || arg == "--script-miss" {
             options.script_miss = true;
         } else if arg == "--graph" {
@@ -234,9 +241,7 @@ fn main() {
     let mut tree = Tree::new();
     let mut matches = 0;
     let mut not_matches = 0;
-    let stdin = stdin();
-    let stdin = stdin.lock();
-    trace::each_trace(stdin, |mut args| {
+    let result = trace::each_trace(options.from_stdin, |mut args| {
         if let Some(ref regex) = options.process_name_filter {
             if !regex.is_match(args.process_name) {
                 return;
@@ -271,6 +276,14 @@ fn main() {
             }
         }
     });
+
+    match result {
+        Ok(()) => { }
+        Err(err) => {
+            eprintln!("I/O error encountered: {:?}", err);
+            exit(1);
+        }
+    }
 
     let total = matches + not_matches;
     graph.set_total(total, options.top_n);

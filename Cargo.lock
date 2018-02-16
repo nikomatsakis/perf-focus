@@ -53,7 +53,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "perf-focus"
-version = "0.0.1"
+version = "0.2.0"
 dependencies = [
  "itertools 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "petgraph 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",

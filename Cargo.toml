@@ -2,6 +2,9 @@
 name = "perf-focus"
 version = "0.1.0"
 authors = ["Niko Matsakis <niko@alum.mit.edu>"]
+license = "Apache-2.0/MIT"
+repository = "https://github.com/nikomatsakis/perf-focus"
+readme = "README.md"
 
 [dependencies]
 regex = "0.1"

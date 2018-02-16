@@ -7,7 +7,7 @@
 //! which we want to transform to just the name of the query `borrowck`.
 
 const QUERY_PREFIX: &str = "rustc::ty::maps::<impl rustc::ty::maps::queries::";
-const QUERY_SUFFIX: &str = "::force";
+const QUERY_SUFFIX: &str = ">::force";
 
 use trace::TraceArgs;
 

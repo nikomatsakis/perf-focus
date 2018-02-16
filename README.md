@@ -44,6 +44,65 @@ named `b`.
 Reports how often a function named `a` was found on the stack
 *without* having (transitively) called a function named `b`.
 
+### Profiling rustc queries
+
+If you pass `--rustc-query`, the tool will apply filter that strips
+out everything but [rustc queries][q]. This is useful for figuring
+out rustc compilation time. I suggest using this in conjunction
+with `--tree-callees`.
+
+[q]: https://rust-lang-nursery.github.io/rustc-guide/query.html
+
+Example:
+
+```
+> perf script | perf-focus '{main}' --rustc-query --tree-callees | head
+Matcher    : {main}
+Matches    : 2690
+Not Matches: 0
+Percentage : 100%
+
+Tree
+| matched `{main}` (100% total, 25% self)
+: | mir_borrowck<'tcx>> (35% total, 35% self)
+: : | normalize_projection_ty<'tcx>> (0% total, 0% self)
+: | typeck_item_bodies<'tcx>> (11% total, 0% self)
+```
+
+### Trees
+
+You can generate callee and caller trees by passing one of the following
+options.
+
+```
+--tree-callee
+--tree-caller
+```
+
+This will give output showing each function that was called, along
+with the percentage of time spent in that subtree ("total") as well as
+in that actual function ("self"). (As always, these are precentages of
+total program execution.) You can customize these with `--tree-max-depth` and `--tree-min-percent`,
+which are useful for culling uninteresting things.
+
+Example output:
+
+```bash
+> perf script | \
+  perf-focus '{add_drop_live_constraint}' --tree-callees --tree-max-depth 3 --tree-min-percent 3 | \
+  head
+Matcher    : {add_drop_live_constraint}
+Matches    : 708
+Not Matches: 1982
+Percentage : 26%
+
+Tree
+| matched `{add_drop_live_constraint}` (26% total, 0% self)
+: | rustc_mir::borrow_check::nll::type_check::TypeChecker::fully_perform_op (25% total, 0% self)
+: : | rustc::infer::InferCtxt::commit_if_ok (23% total, 0% self)
+: : : | <std::collections::hash::set::HashSet<T, S>>::insert (8% total, 0% self) [...]
+```
+
 ### Graphs
 
 You can also generate call graphs by passing one of the following

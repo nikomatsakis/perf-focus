@@ -47,11 +47,13 @@ struct Options {
     tree_mode: Option<GraphMode>,
     tree_max_depth: usize,
     tree_min_percent: usize,
+    tree_leaf: bool,
     rename: Vec<(regex::Regex, String)>,
+    relative: bool,
 }
 
 fn usage(msg: &str) -> ! {
-    println!("Usage: perf-focus [options] <matcher>");
+    println!("Usage: perf-focus [options] [matcher]");
     println!("");
     println!("Options:");
     println!(" --process-name <regex>   filter samples by process name");
@@ -60,6 +62,7 @@ fn usage(msg: &str) -> ! {
     println!(" --print-miss             dump samples that do not match");
     println!(" --script-match           dump samples that match in `perf script` format");
     println!(" --script-miss            dump samples that do not match in `perf script` format");
+    println!(" --relative               make percentages relative to number of matches");
     println!(" --top-n <n>              limit graph or histograms to the top <n> fns");
     println!(" --graph <file>           dumps a callgraph of matching samples into <file>");
     println!(" --graph-callers <file>   as above, but only dumps callers of the matcher");
@@ -72,6 +75,7 @@ fn usage(msg: &str) -> ! {
     println!(" --tree-callees           prints out a tree of the callees");
     println!(" --tree-max-depth <n>     limit tree to the outermost N functions");
     println!(" --tree-min-percent <n>   limit tree to fns whose total time exceeds N%");
+    println!(" --tree-leaf              only print nodes that have 'self hits'");
     println!(" --rename <match> <repl>  post-process names for graphs/histograms;");
     println!("                          see `replace_all` in Regex doc [1] for instructions.");
     println!("                          May be specified more than once.");
@@ -103,6 +107,7 @@ fn parse_options() -> Options {
 
     let mut options = Options {
         process_name_filter: None,
+        relative: false,
         from_stdin: false,
         rustc_query: false,
         matcher: None,
@@ -116,6 +121,7 @@ fn parse_options() -> Options {
         top_n: 22,
         tree_max_depth: ::std::usize::MAX,
         tree_min_percent: 0,
+        tree_leaf: false,
         rename: vec![],
     };
 
@@ -143,6 +149,8 @@ fn parse_options() -> Options {
             options.script_match = true;
         } else if arg == "--rustc-query" {
             options.rustc_query = true;
+        } else if arg == "--relative" {
+            options.relative = true;
         } else if arg == "--from-stdin" {
             options.from_stdin = true;
         } else if arg == "--print-miss" || arg == "--script-miss" {
@@ -174,6 +182,8 @@ fn parse_options() -> Options {
         } else if arg == "--tree-min-percent" {
             let n = expect(usize::from_str(&*expect(args.next())).ok());
             options.tree_min_percent = n;
+        } else if arg == "--tree-leaf" {
+            options.tree_leaf = true;
         } else if arg == "--rename" {
             let m = check_err(
                 "invalid regular expression",
@@ -199,10 +209,6 @@ fn parse_options() -> Options {
                 }
             }
         }
-    }
-
-    if options.matcher.is_none() {
-        usage("Error: no matcher supplied");
     }
 
     return options;
@@ -234,7 +240,8 @@ fn parse_options() -> Options {
 
 fn main() {
     let options = parse_options();
-    let matcher = options.matcher.as_ref().unwrap();
+    let empty_matcher = &matcher::empty_matcher();
+    let matcher = options.matcher.as_ref().unwrap_or(empty_matcher);
 
     let mut graph = CallGraph::new();
     let mut hist = Histogram::new();
@@ -278,14 +285,19 @@ fn main() {
     });
 
     match result {
-        Ok(()) => { }
+        Ok(()) => {}
         Err(err) => {
             eprintln!("I/O error encountered: {:?}", err);
             exit(1);
         }
     }
 
-    let total = matches + not_matches;
+    let total = if options.relative {
+        matches
+    } else {
+        matches + not_matches
+    };
+
     graph.set_total(total, options.top_n);
 
     if let Some(ref graph_file) = options.graph_file {
@@ -310,6 +322,10 @@ fn main() {
         println!("");
         println!("Tree");
         tree.sort();
+        if options.tree_leaf {
+            tree.rollup(total, options.tree_max_depth, options.tree_min_percent);
+            tree.only_leaves();
+        }
         tree.dump(total, options.tree_max_depth, options.tree_min_percent);
     }
 }

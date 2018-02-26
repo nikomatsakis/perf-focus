@@ -61,6 +61,23 @@ impl Tree {
         self.root_node.sort();
     }
 
+    pub fn rollup(&mut self, total_samples: usize, max_depth: usize, min_percent: usize) {
+        for child in &mut self.root_node.children {
+            child.rollup(
+                0,
+                total_samples,
+                max_depth,
+                min_percent,
+            );
+        }
+
+        self.sort();
+    }
+
+    pub fn only_leaves(&mut self) {
+        self.root_node.only_leaves();
+    }
+
     pub fn dump(&self, total_samples: usize, max_depth: usize, min_percent: usize) {
         for child in &self.root_node.children {
             child.dump(
@@ -70,6 +87,12 @@ impl Tree {
                 min_percent,
             );
         }
+    }
+
+    pub fn for_each_leaf<F>(&self, mut f: F)
+        where F: FnMut(&str, usize)
+    {
+        self.root_node.for_each_leaf(&mut f)
     }
 }
 
@@ -88,6 +111,56 @@ impl TreeNode {
         for c in &mut self.children {
             c.sort();
         }
+    }
+
+    pub fn into_only_leaves(mut self) -> Vec<TreeNode> {
+        self.only_leaves();
+
+        if self.hits_self > 0 {
+            vec![self]
+        } else {
+            self.children
+        }
+    }
+
+    pub fn only_leaves(&mut self) {
+        let new_children: Vec<TreeNode> =
+            self.children
+                .drain(..)
+                .flat_map(|c| {
+                    c.into_only_leaves()
+                })
+                .collect();
+        self.children = new_children;
+    }
+
+    fn rollup(
+        &mut self,
+        parents: usize,
+        total_samples: usize,
+        max_depth: usize,
+        min_percent: usize,
+    ) -> bool {
+        let total_percent = percent(self.hits_total, total_samples);
+        if (total_percent as usize) < min_percent {
+            return false;
+        }
+
+        if parents > max_depth {
+            return false;
+        }
+
+        for c in &mut self.children {
+            if !c.rollup(parents + 1, total_samples, max_depth, min_percent) {
+                self.hits_self += c.hits_total;
+                c.hits_total = 0;
+            } else {
+                assert!(c.hits_total > 0);
+            }
+        }
+
+        self.children.retain(|c| c.hits_total != 0);
+        true
     }
 
     fn dump(
@@ -118,6 +191,19 @@ impl TreeNode {
         println!();
         for c in &self.children {
             c.dump(parents + 1, total_samples, max_depth, min_percent);
+        }
+    }
+
+    fn for_each_leaf<F>(&self, f: &mut F)
+        where F: FnMut(&str, usize)
+    {
+        if !self.children.is_empty() {
+            for c in &self.children {
+                c.for_each_leaf(f);
+            }
+        } else {
+            assert_eq!(self.hits_total, self.hits_self);
+            f(&self.label, self.hits_total);
         }
     }
 

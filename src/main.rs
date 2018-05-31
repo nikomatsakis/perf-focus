@@ -7,24 +7,27 @@ use std::str::FromStr;
 
 extern crate itertools;
 extern crate regex;
+extern crate prettytable;
 
 #[macro_use]
 extern crate rusty_peg;
 
-mod histogram;
+mod flat;
 mod graph;
+mod histogram;
 mod matcher;
 mod rustc_query;
 mod trace;
 mod tree;
 mod util;
 
+use flat::Flat;
 use histogram::Histogram;
 use graph::CallGraph;
 use matcher::{parse_matcher, Matcher, SearchResult};
 use regex::Regex;
 use tree::Tree;
-use util::percent;
+use util::{percent, seconds_str};
 
 trait AddFrames {
     fn add_frames<I>(&mut self, frames: I)
@@ -46,10 +49,12 @@ struct Options {
     top_n: usize,
     tree_mode: Option<GraphMode>,
     tree_max_depth: usize,
-    tree_min_percent: usize,
     tree_leaf: bool,
+    flat_mode: bool,
+    min_percent: usize,
     rename: Vec<(regex::Regex, String)>,
     relative: bool,
+    frequency: usize,
 }
 
 fn usage(msg: &str) -> ! {
@@ -74,8 +79,9 @@ fn usage(msg: &str) -> ! {
     println!(" --tree-callers           prints out an (inverted) tree of the callers");
     println!(" --tree-callees           prints out a tree of the callees");
     println!(" --tree-max-depth <n>     limit tree to the outermost N functions");
-    println!(" --tree-min-percent <n>   limit tree to fns whose total time exceeds N%");
     println!(" --tree-leaf              only print nodes that have 'self hits'");
+    println!(" --flat                   prints out a flat profile of which fns had most time");
+    println!(" --min-percent <n>        limit flat/tree to fns whose total time exceeds N%");
     println!(" --rename <match> <repl>  post-process names for graphs/histograms;");
     println!("                          see `replace_all` in Regex doc [1] for instructions.");
     println!("                          May be specified more than once.");
@@ -83,6 +89,8 @@ fn usage(msg: &str) -> ! {
     println!(" --from-stdin             read samples from stdin;");
     println!("                          when not using this option,");
     println!("                          we will execute `perf script`");
+    println!(" -F, --frequency <n>      frequency at which samples were recorded (-F in perf)");
+    println!("                          (default: 1000 Hz, like perf)");
     println!("");
     println!("{}", msg);
     exit(1)
@@ -107,6 +115,7 @@ fn parse_options() -> Options {
 
     let mut options = Options {
         process_name_filter: None,
+        frequency: 1000,
         relative: false,
         from_stdin: false,
         rustc_query: false,
@@ -118,9 +127,10 @@ fn parse_options() -> Options {
         graph_mode: None,
         hist_mode: None,
         tree_mode: None,
+        flat_mode: false,
         top_n: 22,
         tree_max_depth: ::std::usize::MAX,
-        tree_min_percent: 0,
+        min_percent: 0,
         tree_leaf: false,
         rename: vec![],
     };
@@ -151,6 +161,12 @@ fn parse_options() -> Options {
             options.rustc_query = true;
         } else if arg == "--relative" {
             options.relative = true;
+        } else if arg == "--frequency" || arg == "-F" {
+            let n = expect(usize::from_str(&*expect(args.next())).ok());
+            if n == 0 {
+                usage("frequency cannot be zero");
+            }
+            options.frequency = n;
         } else if arg == "--from-stdin" {
             options.from_stdin = true;
         } else if arg == "--print-miss" || arg == "--script-miss" {
@@ -161,6 +177,8 @@ fn parse_options() -> Options {
             set_graph(&mut options, args.next(), GraphMode::Caller);
         } else if arg == "--graph-callees" {
             set_graph(&mut options, args.next(), GraphMode::Callee);
+        } else if arg == "--flat" {
+            options.flat_mode = true;
         } else if arg == "--hist" {
             set_hist(&mut options, GraphMode::All);
         } else if arg == "--hist-callers" {
@@ -179,9 +197,9 @@ fn parse_options() -> Options {
         } else if arg == "--tree-max-depth" {
             let n = expect(usize::from_str(&*expect(args.next())).ok());
             options.tree_max_depth = n;
-        } else if arg == "--tree-min-percent" {
+        } else if arg == "--min-percent" {
             let n = expect(usize::from_str(&*expect(args.next())).ok());
-            options.tree_min_percent = n;
+            options.min_percent = n;
         } else if arg == "--tree-leaf" {
             options.tree_leaf = true;
         } else if arg == "--rename" {
@@ -246,6 +264,7 @@ fn main() {
     let mut graph = CallGraph::new();
     let mut hist = Histogram::new();
     let mut tree = Tree::new();
+    let mut flat = Flat::new();
     let mut matches = 0;
     let mut not_matches = 0;
     let result = trace::each_trace(options.from_stdin, |mut args| {
@@ -274,6 +293,8 @@ fn main() {
                 add_frames(&matcher, mode, args.stack, result, &options, &mut graph);
             } else if let Some(mode) = options.tree_mode {
                 add_frames(&matcher, mode, args.stack, result, &options, &mut tree);
+            } else if options.flat_mode {
+                add_frames(&matcher, GraphMode::Callee, args.stack, result, &options, &mut flat);
             }
         } else {
             not_matches += 1;
@@ -310,12 +331,15 @@ fn main() {
     println!("Matcher    : {:?}", matcher);
     println!("Matches    : {}", matches);
     println!("Not Matches: {}", not_matches);
-    println!("Percentage : {}%", percent(matches, total));
+    println!("Percentage : {}", percent(matches, total));
+    println!("Time       : {} at {} Hz",
+             seconds_str(matches, options.frequency),
+             options.frequency);
 
     if options.hist_mode.is_some() {
         println!("");
         println!("Histogram");
-        hist.dump(total, options.top_n);
+        hist.dump(total, options.top_n, options.frequency);
     }
 
     if options.tree_mode.is_some() {
@@ -323,10 +347,15 @@ fn main() {
         println!("Tree");
         tree.sort();
         if options.tree_leaf {
-            tree.rollup(total, options.tree_max_depth, options.tree_min_percent);
+            tree.rollup(total, options.tree_max_depth, options.min_percent);
             tree.only_leaves();
         }
-        tree.dump(total, options.tree_max_depth, options.tree_min_percent);
+        tree.dump(total, options.tree_max_depth, options.min_percent);
+    }
+
+    if options.flat_mode {
+        flat.rollup(total, options.min_percent);
+        flat.dump(total);
     }
 }
 
